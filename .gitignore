@@ -1,0 +1,10 @@
+known_faces/
+venv/
+.venv/
+known_faces/
+__pycache__/
+*.pycvenv/
+.venv/
+known_faces/
+__pycache__/
+*.pyc
