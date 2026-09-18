@@ -39,31 +39,27 @@ VIDEO_SOURCE = 0
 
 SIMILARITY_THRESHOLD = 0.40
 
-# Smaller default than before. buffalo_l's detector is heavier than it needs
-# to be for real-time on a laptop 4050 — 640x640 is a much safer real-time
-# baseline. Only raise this once you're comfortably above 25fps and need
-# more far-face range.
-DET_SIZE = (640, 640)
+# 320x320 is a big cut in detector cost vs 640x640. Only raise this if you
+# need far-face range and can afford the extra ms.
+DET_SIZE = (320, 320)
 
-# "buffalo_l" = larger/more accurate, "buffalo_s" = smaller/faster.
-# Start with buffalo_s to confirm you can HIT 25fps at all, then move up
-# to buffalo_l once you have headroom.
 MODEL_NAME = "buffalo_s"
 
-# Cap the camera's own capture resolution. A 1080p/4K webcam feed costs
-# real time just to read and copy every frame, before any AI even runs.
-# Match this to what you actually need — 720p is plenty for most webcams.
 CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
 
-# Only run detection+recognition every N frames.
 PROCESS_EVERY_N_FRAMES = 2
+
+# Where TensorRT caches its compiled engines. First run after any change to
+# DET_SIZE, MODEL_NAME, or this cache path will take 30-90s to build the
+# engine — that is NOT a hang, let it finish. Every run after that reuses
+# the cached engine and starts fast.
+TRT_CACHE_DIR = "trt_cache"
+os.makedirs(TRT_CACHE_DIR, exist_ok=True)
 
 
 class ThreadedCamera:
     def __init__(self, source, width=None, height=None):
-        # CAP_DSHOW on Windows opens faster and with lower inherent latency
-        # than the default backend for most USB webcams.
         backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else 0
         self.cap = cv2.VideoCapture(source, backend)
         if not self.cap.isOpened():
@@ -73,9 +69,6 @@ class ThreadedCamera:
         if height:
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        # Keep the driver's internal frame buffer as small as possible so we
-        # always grab the newest frame rather than one queued a few frames
-        # ago — this is a real source of "lag that isn't FPS."
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self.ret, self.frame = self.cap.read()
@@ -101,28 +94,32 @@ class ThreadedCamera:
 
 
 def check_gpu():
-    """Prints exactly what ONNX Runtime can see. If CUDAExecutionProvider is
-    missing, every fix below is pointless until that's resolved — you'd be
-    running entirely on CPU regardless of DET_SIZE or frame skipping."""
     available = onnxruntime.get_available_providers()
     print("ONNX Runtime available providers:", available)
     if "CUDAExecutionProvider" not in available:
         print("!! CUDAExecutionProvider NOT available — running on CPU. !!")
-        print("!! This is almost certainly why it's slow. Fix this first")
-        print("!! (mismatched CUDA/cuDNN version vs onnxruntime-gpu, or")
-        print("!! onnxruntime-gpu not actually installed) before tuning")
-        print("!! anything else.")
+    if "TensorrtExecutionProvider" not in available:
+        print("!! TensorrtExecutionProvider not available — falling back to CUDA only. !!")
     return available
 
 
 def build_app():
-    check_gpu()
-    # Explicitly request only CUDA + CPU. We deliberately do NOT pass
-    # TensorrtExecutionProvider even if it shows up as "available" -- it
-    # requires a separate TensorRT install and just produces noisy failed
-    # load attempts on every model otherwise, before falling back anyway.
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    app = FaceAnalysis(name=MODEL_NAME, providers=providers)
+    available = check_gpu()
+
+    providers = []
+    if "TensorrtExecutionProvider" in available:
+        providers.append(("TensorrtExecutionProvider", {
+            "trt_engine_cache_enable": True,
+            "trt_engine_cache_path": TRT_CACHE_DIR,
+            "trt_fp16_enable": True,
+        }))
+    providers.append("CUDAExecutionProvider")
+    providers.append("CPUExecutionProvider")
+
+    # Only load the detection + recognition models — skip landmark_3d_68,
+    # landmark_2d_106, and genderage since nothing in this script uses them.
+    app = FaceAnalysis(name=MODEL_NAME, providers=providers,
+                        allowed_modules=['detection', 'recognition'])
     app.prepare(ctx_id=0, det_size=DET_SIZE)
     return app
 
