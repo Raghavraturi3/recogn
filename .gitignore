@@ -8,3 +8,4 @@ __pycache__/
 known_faces/
 __pycache__/
 *.pyc
+sound/
