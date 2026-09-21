@@ -16,7 +16,7 @@ KNOWN_FACES_DIR = os.path.join(BASE_DIR, "known_faces")
 SOUND_DIR = os.path.join(BASE_DIR, "sound")
 
 # Find the Pi's IP with `hostname -I` on the Pi.
-VIDEO_SOURCE = "http://<pi-ip>:8000/stream.mjpg"
+VIDEO_SOURCE = "http://192.168.8.192:81/stream"
 
 SIMILARITY_THRESHOLD = 0.40
 
